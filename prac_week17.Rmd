@@ -1,0 +1,168 @@
+---
+title: "practical_BCM_week17"
+author: "FWJ Lewin"
+date: "2025-02-28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rstan)
+x <- c(1.20, 1.21, 3.06, 7.89, 5.67, 6.10, 3.90)
+n <- length(x)
+
+stan_data <- list(
+  n = n,
+  x = x
+)
+
+fit <- stan(file = "~/stan4_yehyeh.stan", data = stan_data, 
+            iter = 2000, chains = 4)
+```
+
+```{r}
+print(fit)
+pairs(fit)
+traceplot(fit)
+
+mu_samples <- extract(fit)$mu
+
+post_mean <- sum(x)/(n+1)
+post_sd <- sqrt(1/(n+1))
+
+# Compare MCMC results with theoretical values
+cat("Theoretical posterior mean:", post_mean, "\n")
+cat("MCMC posterior mean:", mean(mu_samples), "\n")
+cat("Theoretical posterior SD:", post_sd, "\n")
+cat("MCMC posterior SD:", sd(mu_samples), "\n")
+
+# Plot histogram of samples with theoretical density overlay
+hist(mu_samples, freq = FALSE, main = "Posterior distribution of mu",
+     xlab = "mu", breaks = 30)
+curve(dnorm(x, post_mean, post_sd), add = TRUE, col = "red", lwd = 2)
+```
+
+
+now for a stranger prior dist
+```{r}
+our_data <- list(n = 20,
+                 p = c(0.25057883, 0.16862872, 0.11989827, 0.28149519, 0.20427907,
+                       0.16859187, 0.40253736, 0.09341611, 0.14762340, 0.14047014,
+                       0.29998209, 0.19349593, 0.21179227, 0.24900885, 0.32570937,
+                       0.12341203, 0.20488021, 0.33726469, 0.08214418, 0.41775598))
+fit2 <- stan(file = "~/stan5_spawnpoint.stan", data = our_data, 
+            iter = 4000, warmup = 1000, chains = 4)
+
+# Check diagnostics
+print(fit2)
+stan_trace(fit2)
+stan_dens(fit2)
+
+# Extract samples
+theta_samples <- extract(fit2)$theta
+
+# Plot histogram of posterior samples
+hist(theta_samples, freq = FALSE, breaks = 30,
+     main = "Posterior Distribution of theta",
+     xlab = expression(theta))
+
+# Calculate posterior mean and 95% credible interval
+post_mean <- mean(theta_samples)
+post_ci <- quantile(theta_samples, c(0.025, 0.975))
+cat("Posterior mean:", post_mean, "\n")
+cat("95% credible interval:", post_ci[1], "-", post_ci[2], "\n")
+
+# Plot prior and posterior together for comparison
+theta_grid <- seq(1, 10, by = 0.01)
+prior_unnorm <- sapply(theta_grid, function(t) {
+  t^3 * exp(-t) * (sin(t) + 1.2)
+})
+prior_density <- prior_unnorm / sum(prior_unnorm * 0.01)
+
+posterior_density <- density(theta_samples)
+
+plot(theta_grid, prior_density, type = "l", col = "blue", 
+     xlab = expression(theta), ylab = "Density", 
+     main = "Prior vs Posterior", ylim = c(0, max(posterior_density$y)))
+lines(posterior_density, col = "red")
+legend("topright", legend = c("Prior", "Posterior"), 
+       col = c("blue", "red"), lty = 1)
+
+# Calculate mean of Beta(2, theta) for interpretation
+expected_p <- 2 / (2 + post_mean)
+cat("Expected value of Beta(2, theta) at posterior mean:", expected_p, "\n")
+```
+hierarchical model now, with a ~ beta(2,1), b|a ~exp(a),
+lambda|b~exp(b), X|lambda ~ poisson(lambda)
+
+```{r}
+hie_data = list(N = 40,
+                K = 2,
+                J = 2,
+                group = c(rep(1, 30),
+                          rep(2, 10)),
+                subgroup = c(sort(rep(1:2, 15)),
+                             sort(rep(1:2, 5))),
+                X = c(3, 2, 2, 2, 1,
+                     2, 3, 4, 0, 0,
+                     2, 5, 4, 4, 1,
+                     3, 3, 3, 4, 4,
+                     2, 5, 3, 4, 4,
+                     1, 1, 3, 3, 5,
+                     1, 0, 1, 1, 0,
+                     1, 0, 1, 2, 0))
+fit3 <- stan(file = "~/stan6_hierarchical.stan", data = hie_data, 
+            iter = 5000, warmup = 1000, chains = 4, cores = 4)
+
+print(fit3, pars = c("alpha", "beta"))
+traceplot(fit3, pars = c("alpha", "beta"))
+stan_dens(fit3, pars = c("alpha", "beta"))
+
+# Extract posterior samples
+posterior <- extract(fit3)
+
+# Investigate alpha
+alpha_samples <- posterior$alpha
+hist(alpha_samples, breaks = 30, main = "Posterior Distribution of alpha", 
+     xlab = "alpha", freq = FALSE)
+cat("Posterior mean of alpha:", mean(alpha_samples), "\n")
+cat("95% credible interval for alpha:", quantile(alpha_samples, c(0.025, 0.975)), "\n")
+
+# Investigate beta
+beta_samples <- posterior$beta
+par(mfrow = c(1, 2))
+for(k in 1:hie_data$K) {
+  hist(beta_samples[,k], breaks = 30, 
+       main = paste("Posterior Distribution of beta[", k, "]", sep = ""),
+       xlab = paste("beta[", k, "]", sep = ""), freq = FALSE)
+}
+par(mfrow = c(1, 1))
+
+# Compare beta values
+cat("Posterior mean of beta[1]:", mean(beta_samples[,1]), "\n")
+cat("Posterior mean of beta[2]:", mean(beta_samples[,2]), "\n")
+cat("95% CI for beta[1]:", quantile(beta_samples[,1], c(0.025, 0.975)), "\n")
+cat("95% CI for beta[2]:", quantile(beta_samples[,2], c(0.025, 0.975)), "\n")
+
+# Compare the distributions
+plot(density(beta_samples[,1]), col = "blue", main = "Posterior Densities of beta",
+     xlab = "beta", ylim = c(0, max(c(density(beta_samples[,1])$y, 
+                                     density(beta_samples[,2])$y))))
+lines(density(beta_samples[,2]), col = "red")
+legend("topright", legend = c("beta[1]", "beta[2]"), 
+       col = c("blue", "red"), lty = 1)
+
+# Look at lambda values
+lambda_samples <- posterior$lambda
+lambda_means <- matrix(0, nrow = hie_data$J, ncol = hie_data$K)
+for(j in 1:hie_data$J) {
+  for(k in 1:hie_data$K) {
+    lambda_means[j,k] <- mean(lambda_samples[,j,k])
+  }
+}
+print("Posterior means of lambda:")
+print(lambda_means)
+```
